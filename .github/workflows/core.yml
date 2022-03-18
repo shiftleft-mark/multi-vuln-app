@@ -8,24 +8,86 @@ on:
   workflow_dispatch:
 
 jobs:
-  ShiftLeft-core-Analysis:
+  ShiftLeft-Source-Analysis:
     runs-on: ubuntu-latest
-    # Use the shiftleft/core image which supports multiple languages such as java, javascript, typescript, python and go
+    # Use the shiftleft/core image which supports multiple languages such as javascript, typescript, python and go
     container:
       image: shiftleft/core:latest
     strategy:
       fail-fast: false
       matrix:
-        language: [go, java, js, python]
+        language: [go, js, python]
     steps:
     - uses: actions/checkout@v2
     - name: Extract branch name
       shell: bash
       run: echo "##[set-output name=branch;]$(echo ${GITHUB_REF#refs/heads/})"
       id: extract_branch
+    # Perform any app specific build or restore here
+    - name: App specific build
+      if: ${{ matrix.language == 'python' }}
+      run: |
+        pip install -r python/requirements.txt
+    # Run SL for the source languages
     - name: Scan source languages
-      if: ${{ matrix.language != 'java' && matrix.language != 'csharp' }}
+      if: ${{ matrix.language == 'js' || matrix.language == 'python' }}
       run: |
         sl analyze --tag app.group=multi-vuln-app --app app-${{ matrix.language }} --tag branch=${{ github.head_ref || steps.extract_branch.outputs.branch }} --${{ matrix.language }} --cpg --oss-recursive .
       env:
         SHIFTLEFT_ACCESS_TOKEN: ${{ secrets.SHIFTLEFT_ACCESS_TOKEN }}
+    # For go, the last argument used must be identical to the one used with go build
+    - name: Scan go application
+      if: ${{ matrix.language == 'go' }}
+      run: |
+        cd go && sl analyze --tag app.group=multi-vuln-app --app app-${{ matrix.language }} --tag branch=${{ github.head_ref || steps.extract_branch.outputs.branch }} --${{ matrix.language }} --cpg --oss-recursive ./...
+      env:
+        SHIFTLEFT_ACCESS_TOKEN: ${{ secrets.SHIFTLEFT_ACCESS_TOKEN }}
+
+  Java-Analysis:
+    runs-on: ubuntu-latest    
+    steps:
+    - uses: actions/checkout@v2
+    - name: Setup Java JDK
+      uses: actions/setup-java@v1.4.3
+      with:
+        java-version: 1.8
+    - name: Download ShiftLeft cli
+      run: |
+        curl https://cdn.shiftleft.io/download/sl > ${GITHUB_WORKSPACE}/sl && chmod a+rx ${GITHUB_WORKSPACE}/sl
+    - name: Extract branch name
+      shell: bash
+      run: echo "##[set-output name=branch;]$(echo ${GITHUB_REF#refs/heads/})"
+      id: extract_branch
+    # This step attempts to auto build maven, gradle and sbt projects
+    - name: Build and Analyze
+      run: |
+        TARGET_DIR=target
+        BUILT=0
+        POM_COUNT=$(find . -maxdepth 1 -type f -name "pom.xml" -not -path '*/\.git/*' | wc -l | tr -d " ")
+        GRADLE_COUNT=$(find . -maxdepth 1 -type f -name "build.gradle" -not -path '*/\.git/*' | wc -l | tr -d " ")
+        SBT_COUNT=$(find . -maxdepth 1 -type f -name "build.sbt" -not -path '*/\.git/*' | wc -l | tr -d " ")
+        if [ "$POM_COUNT" != "0" ]; then
+          mvn compile package
+          BUILT=1
+        elif [ "$GRADLE_COUNT" != "0" ]; then
+          gradle jar
+          #./gradlew jar
+          TARGET_DIR=build
+          BUILT=1
+        elif [ "$SBT_COUNT" != "0" ]; then
+          echo "deb https://dl.bintray.com/sbt/debian /" | sudo tee -a /etc/apt/sources.list.d/sbt.list
+          curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823" | sudo apt-key add
+          sudo apt update -y
+          sudo apt-get install sbt -y
+          sbt package
+          BUILT=1
+        fi
+        if [ "$BUILT" = "1" ] && [ -d "$TARGET_DIR" ]; then
+          jar cvf app.jar -C $TARGET_DIR .
+          ${GITHUB_WORKSPACE}/sl analyze --wait --tag app.group=multi-vuln-app --app app-java --tag branch=${{ github.head_ref || steps.extract_branch.outputs.branch }} --java --cpg app.jar
+        else
+          echo "Unable to build the project automatically. Please follow the instructions in our documentation to setup this project - https://docs.shiftleft.io/ngsast/analyzing-applications/java"  
+        fi
+      env:
+        SHIFTLEFT_ACCESS_TOKEN: ${{ secrets.SHIFTLEFT_ACCESS_TOKEN }}
+      working-directory: java
