@@ -8,6 +8,9 @@ on:
   workflow_dispatch:
 
 jobs:
+  ##############################################
+  # Scan dynamic languages
+  ##############################################
   ShiftLeft-Source-Analysis:
     runs-on: ubuntu-latest
     # Use the shiftleft/core image which supports multiple languages such as javascript, typescript, python and go
@@ -42,7 +45,9 @@ jobs:
         cd go && sl analyze --tag app.group=multi-vuln-app --app app-${{ matrix.language }} --tag branch=${{ github.head_ref || steps.extract_branch.outputs.branch }} --${{ matrix.language }} --cpg --oss-recursive ./...
       env:
         SHIFTLEFT_ACCESS_TOKEN: ${{ secrets.SHIFTLEFT_ACCESS_TOKEN }}
-
+  ##############################################
+  # Scan Java
+  ##############################################
   Java-Analysis:
     runs-on: ubuntu-latest    
     steps:
@@ -91,3 +96,30 @@ jobs:
       env:
         SHIFTLEFT_ACCESS_TOKEN: ${{ secrets.SHIFTLEFT_ACCESS_TOKEN }}
       working-directory: java
+  ##############################################
+  # Check violations for each language
+  ##############################################
+  Build-Rules:
+    runs-on: ubuntu-latest
+    needs: [ShiftLeft-Source-Analysis, Java-Analysis]
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [go, js, python, java]
+    steps:
+    - uses: actions/checkout@v2
+    - name: Download ShiftLeft CLI
+      run: |
+        curl https://cdn.shiftleft.io/download/sl > ${GITHUB_WORKSPACE}/sl && chmod a+rx ${GITHUB_WORKSPACE}/sl
+    - name: Extract branch name
+      shell: bash
+      run: echo "##[set-output name=branch;]$(echo ${GITHUB_REF#refs/heads/})"
+      id: extract_branch
+    - name: Validate Build Rules per app
+      if: ${{ github.event_name == 'pull_request' }}
+      run: ${GITHUB_WORKSPACE}/sl check-analysis --v2 --config shiftleft.yml --app app-${{ matrix.language }} \
+            --branch "${{ github.head_ref || steps.extract_branch.outputs.branch }}" --report \
+            --github-pr-number=${{github.event.number}} --github-pr-user=${{ github.repository_owner }} \
+            --github-pr-repo=${{ github.event.repository.name }}  --github-token=${{ secrets.GITHUB_TOKEN }}
+      env:
+        SHIFTLEFT_ACCESS_TOKEN: ${{ secrets.SHIFTLEFT_ACCESS_TOKEN }}
