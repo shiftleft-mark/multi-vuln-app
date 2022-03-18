@@ -1,0 +1,31 @@
+---
+# This workflow integrates ShiftLeft with GitHub
+# Visit https://docs.shiftleft.io for help
+name: ShiftLeft CORE
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  ShiftLeft-core-Analysis:
+    runs-on: ubuntu-latest
+    # Use the shiftleft/core image which supports multiple languages such as java, javascript, typescript, python and go
+    container:
+      image: shiftleft/core:latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [go, java, js, python]
+    steps:
+    - uses: actions/checkout@v2
+    - name: Extract branch name
+      shell: bash
+      run: echo "##[set-output name=branch;]$(echo ${GITHUB_REF#refs/heads/})"
+      id: extract_branch
+    - name: Scan source languages
+      if: ${{ matrix.language != 'java' && matrix.language != 'csharp' }}
+      run: |
+        sl analyze --tag app.group=multi-vuln-app --app app-${{ matrix.language }} --tag branch=${{ github.head_ref || steps.extract_branch.outputs.branch }} --${{ matrix.language }} --cpg --oss-recursive .
+      env:
+        SHIFTLEFT_ACCESS_TOKEN: ${{ secrets.SHIFTLEFT_ACCESS_TOKEN }}

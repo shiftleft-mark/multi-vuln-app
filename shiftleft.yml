@@ -1,0 +1,14 @@
+source:
+  branch: master
+build_rules:
+  - id: no-critical-vulns
+    finding_types:
+      - vuln
+    severity:
+      - critical
+    threshold: 10
+  - id: no-reachable-oss-vuln
+    finding_types: [oss_vuln]
+    options:
+      reachable: true
+      num_findings: 5
